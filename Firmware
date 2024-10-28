@@ -1,0 +1,273 @@
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <ArduinoJson.h>
+#include <Wire.h>              // Thư viện giao tiếp I2C
+#include <LiquidCrystal_I2C.h> // Thư viện giao tiếp LCD theo chuẩn I2C
+#include "FirebaseESP32.h"
+#include "DHTesp.h"
+
+#define WIFI_SSID "SINH VIEN"
+#define WIFI_PASSWORD "13112004"
+
+#define FIREBASE_HOST "iot-nhakinh-default-rtdb.firebaseio.com/"
+#define FIREBASE_AUTH "HFIxd7BNUqPrxgbFvDwRjjLQuecYR1iw2CjYNB5j"
+
+FirebaseData firebaseData;
+FirebaseJson Json;
+String path = "/";
+
+LiquidCrystal_I2C lcd(0x27, 16, 2); // Khai báo địa chỉ và thông tin LCD
+DHTesp dht;
+
+int x = 0, y = 0;
+int LED1 = 12;
+int cambien = 34;
+int dhtPin = 23;
+unsigned long currentTime = millis();
+float temp, humi;
+unsigned long previousMillis = 0; // Thời gian lưu lần cuối gửi dữ liệu
+const long interval = 30000;      // Khoảng thời gian gửi dữ liệu (1 phút)
+
+// Khai báo các chân kết nối
+const int button1 = 15; // Chân kết nối với POWER
+const int button2 = 4;  // Chân kết nối với nút điều khiển ánh sáng
+const int ledPin1 = 13; // Chân kết nối với đèn LED
+const int ledPin2 = 12; // Chân kết nối với đèn LED
+const int button3 = 18; // Chân kết nối với phun sương
+const int ledPin3 = 14; // Chân kết nối với đèn LED
+const int button4 = 19; // Chân kết nối với quạt gió
+const int ledPin4 = 27; // Chân kết nối với đèn LED
+
+int buttonState1 = 0, buttonState2 = 0, buttonState3 = 0, buttonState4 = 0;
+
+void setup()
+{
+    Serial.begin(115200);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    while (WiFi.status() != WL_CONNECTED)
+    {
+        delay(500);
+        Serial.print(".");
+    }
+
+    Firebase.begin(FIREBASE_HOST, FIREBASE_AUTH);
+    Firebase.reconnectWiFi(true);
+    if (!Firebase.beginStream(firebaseData, path))
+    {
+        Serial.println("REASON: " + firebaseData.errorReason());
+        Serial.println();
+    }
+
+    Serial.print("Connected with IP: ");
+    Serial.println(WiFi.localIP());
+    Serial.println();
+    pinMode(button1, INPUT_PULLUP);
+    pinMode(button2, INPUT_PULLUP);
+    pinMode(button3, INPUT_PULLUP);
+    pinMode(button4, INPUT_PULLUP);
+
+    pinMode(ledPin1, OUTPUT);
+    pinMode(ledPin2, OUTPUT);
+    pinMode(ledPin3, OUTPUT);
+    pinMode(ledPin4, OUTPUT);
+
+    pinMode(cambien, INPUT);
+    pinMode(LED1, OUTPUT);
+
+    dht.setup(dhtPin, DHTesp::DHT11);
+    digitalWrite(ledPin1, HIGH);
+    int a = digitalRead(ledPin1);
+    Firebase.setInt(firebaseData, "/trangthai/power", a);
+
+    Wire.begin();
+    lcd.init();
+    lcd.clear();
+    lcd.backlight();
+
+    lcd.setCursor(4, 0);
+    lcd.print("WELCOME!");
+    delay(1000);
+
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("HETHONGIOT NHOM3");
+    delay(2000);
+}
+
+void loop()
+{
+    Firebase.getInt(firebaseData, "/trangthai/chedo");
+    int o = firebaseData.intData();
+
+    buttonState2 = digitalRead(button2);
+    buttonState3 = digitalRead(button3);
+    buttonState4 = digitalRead(button4);
+    if (o == 1)
+    {
+        if (y == 0)
+        {
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.print("CHE DO TU DONG");
+            delay(1000);
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.print("T:");
+            lcd.setCursor(10, 0);
+            lcd.print("H:");
+            delay(1000);
+            y = 1;
+        }
+
+        if (millis() - currentTime > 1000)
+        {
+            float h = dht.getHumidity();
+            float t = dht.getTemperature();
+            if (dht.getStatusString() == "OK")
+            {
+                temp = t;
+                humi = h;
+
+                lcd.setCursor(2, 0);
+                lcd.print(t, 1);      // In giá trị nhiệt độ với 1 chữ số thập phân
+                lcd.print((char)223); // In ký tự độ C
+                lcd.print("C");
+
+                lcd.setCursor(12, 0);
+                lcd.print(h, 0); // In giá trị độ ẩm với 0 chữ số thập phân
+                lcd.print("%");
+                unsigned long currentMillis = millis();
+                if (currentMillis - previousMillis >= interval)
+                {
+                    previousMillis = currentMillis;
+                    // đẩy lên firebase ở trường thông số
+                    Firebase.pushFloat(firebaseData, "/thongso/nhietdo", t);
+                    Firebase.pushFloat(firebaseData, "/thongso/doam", h);
+                }
+                // Kiểm tra nhiệt độ và điều khiển quạt, phun sương
+                if (temp > 28.0)
+                {                               // Nếu nhiệt độ lớn hơn 28 độ C
+                    digitalWrite(ledPin3, LOW); // Bật phun sương
+                    digitalWrite(ledPin4, LOW); // Bật quạt gió
+                }
+                else
+                {
+                    digitalWrite(ledPin3, HIGH); // Tắt phun sương
+                    digitalWrite(ledPin4, HIGH); // Tắt quạt gió
+                }
+
+                // Kiểm tra độ ẩm
+                if (humi > 55.0)
+                {
+                    digitalWrite(ledPin4, LOW); // Bật quạt gió 27
+                }
+                else if (humi < 45.0)
+                {
+                    digitalWrite(ledPin3, LOW); // Bật phun sương 14
+                }
+            }
+
+            currentTime = millis();
+            int anhsang = digitalRead(cambien);
+            Firebase.setInt(firebaseData, "/thongso/anhsang", anhsang);
+            delay(100);
+            lcd.setCursor(2, 1);
+            if (anhsang == 1)
+            {
+                lcd.print("THIEU ANH SANG");
+                digitalWrite(ledPin2, LOW);
+                x = 0;
+            }
+            else
+            {
+                lcd.print("DU ANH SANG   ");
+                digitalWrite(ledPin2, HIGH);
+                x = 0;
+            }
+        }
+    }
+    else
+    {
+        if (x == 0)
+        {
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.print("CHE DO BANG TAY");
+            delay(1000);
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.print("XIN MOI");
+            lcd.setCursor(6, 1);
+            lcd.print("DIEU KHIEN");
+            delay(1000);
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.print("AS:");
+            lcd.setCursor(3, 1);
+            lcd.print("SUONG:");
+            lcd.setCursor(9, 0);
+            lcd.print("GIO:");
+            x = 1;
+        }
+        Firebase.getInt(firebaseData, "/dieukhien/anhsang");
+        int p = firebaseData.intData();
+        if (p == 1)
+        {
+            digitalWrite(ledPin2, LOW);
+            lcd.setCursor(3, 0);
+            lcd.print("    ");
+            lcd.setCursor(3, 0);
+            lcd.print("ON");
+            y = 0;
+        }
+        else
+        {
+            digitalWrite(ledPin2, HIGH);
+            lcd.setCursor(3, 0);
+            lcd.print("    ");
+            lcd.setCursor(3, 0);
+            lcd.print("OFF");
+            y = 0;
+        }
+        Firebase.getInt(firebaseData, "/dieukhien/phunsuong");
+        int h = firebaseData.intData();
+        if (h == 1)
+        {
+            digitalWrite(ledPin3, LOW);
+            lcd.setCursor(9, 1);
+            lcd.print("        ");
+            lcd.setCursor(9, 1);
+            lcd.print("ON");
+            y = 0;
+        }
+        else
+        {
+            digitalWrite(ledPin3, HIGH);
+            lcd.setCursor(9, 1);
+            lcd.print("        ");
+            lcd.setCursor(9, 1);
+            lcd.print("OFF");
+            y = 0;
+        }
+        Firebase.getInt(firebaseData, "/dieukhien/quatgio");
+        int j = firebaseData.intData();
+        if (j == 1)
+        {
+            digitalWrite(ledPin4, LOW);
+            lcd.setCursor(13, 0);
+            lcd.print("        ");
+            lcd.setCursor(13, 0);
+            lcd.print("ON");
+            y = 0;
+        }
+        else
+        {
+            digitalWrite(ledPin4, HIGH);
+            lcd.setCursor(13, 0);
+            lcd.print("        ");
+            lcd.setCursor(13, 0);
+            lcd.print("OFF");
+            y = 0;
+        }
+    }
+}
